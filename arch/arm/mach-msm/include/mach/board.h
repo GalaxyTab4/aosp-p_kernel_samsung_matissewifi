@@ -27,13 +27,11 @@
 #include <linux/msm_ssbi.h>
 #include <mach/msm_bus.h>
 
-#ifdef CONFIG_WCNSS_IRIS_REGISTER_DUMP
 #define WLAN_RF_REG_ADDR_START_OFFSET   0x3
 #define WLAN_RF_REG_DATA_START_OFFSET   0xf
 #define WLAN_RF_READ_REG_CMD            0x3
 #define WLAN_RF_WRITE_REG_CMD           0x2
 #define WLAN_RF_READ_CMD_MASK           0x3fff
-#endif
 
 struct msm_camera_io_ext {
 	uint32_t mdcphy;
@@ -696,4 +694,5 @@ int brcm_wifi_status_register(
 unsigned int brcm_wifi_status(struct device *dev);
 #endif
 
+u32 wcnss_rf_read_reg(u32 rf_reg_addr);
 #endif
