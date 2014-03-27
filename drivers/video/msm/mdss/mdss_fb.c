@@ -22,6 +22,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
+#include <linux/dma-buf.h>
 #include <linux/fb.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
@@ -932,7 +933,7 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 		if ((pdata) && (pdata->set_backlight)) {
 			mutex_lock(&mfd->bl_lock);
 			mfd->bl_level = mfd->unset_bl_level;
-			pr_info("mfd->bl_level (%d), bl_updated (%d)\n", 
+			pr_info("mfd->bl_level (%d), bl_updated (%d)\n",
 				mfd->bl_level, mfd->bl_updated);
 			pdata->set_backlight(pdata, mfd->bl_level);
 			mfd->bl_level_old = mfd->unset_bl_level;
@@ -941,7 +942,7 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 		}
 	} else {
 		if (fist_commit_flag)
-			pr_info("no update backlight!! unset bl (%d), bl updated (%d)\n", 
+			pr_info("no update backlight!! unset bl (%d), bl updated (%d)\n",
 					mfd->unset_bl_level, mfd->bl_updated);
 	}
 }
@@ -1020,7 +1021,7 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	}
         mutex_unlock(&mfd->ctx_lock);
 	mutex_unlock(&mfd->power_state);
-	
+
 	pr_info("FB_NUM:%d, MDSS_FB_%s -- \n", mfd->panel_info->fb_num,
 			blank_mode ? "BLANK": "UNBLANK");
 
@@ -1160,17 +1161,34 @@ static int mdss_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 	return 0;
 }
 
-static struct fb_ops mdss_fb_ops = {
-	.owner = THIS_MODULE,
-	.fb_open = mdss_fb_open,
-	.fb_release = mdss_fb_release,
-	.fb_check_var = mdss_fb_check_var,	/* vinfo check */
-	.fb_set_par = mdss_fb_set_par,	/* set the video mode */
-	.fb_blank = mdss_fb_blank,	/* blank display */
-	.fb_pan_display = mdss_fb_pan_display,	/* pan display */
-	.fb_ioctl = mdss_fb_ioctl,	/* perform fb specific ioctl */
-	.fb_mmap = mdss_fb_mmap,
-};
+void mdss_fb_free_fb_ion_memory(struct msm_fb_data_type *mfd)
+{
+	if (!mfd) {
+		pr_err("no mfd\n");
+		return;
+	}
+
+	if (!mfd->fbi->screen_base)
+		return;
+
+	if (!mfd->fb_ion_client || !mfd->fb_ion_handle) {
+		pr_err("invalid input parameters for fb%d\n", mfd->index);
+		return;
+	}
+
+	mfd->fbi->screen_base = NULL;
+	mfd->fbi->fix.smem_start = 0;
+
+	ion_unmap_kernel(mfd->fb_ion_client, mfd->fb_ion_handle);
+
+	if (mfd->mdp.fb_mem_get_iommu_domain) {
+		ion_unmap_iommu(mfd->fb_ion_client, mfd->fb_ion_handle,
+				mfd->mdp.fb_mem_get_iommu_domain(), 0);
+	}
+
+	dma_buf_put(mfd->fbmem_buf);
+	ion_free(mfd->fb_ion_client, mfd->fb_ion_handle);
+}
 
 static int mdss_fb_alloc_fbmem_iommu(struct msm_fb_data_type *mfd, int dom)
 {
@@ -1199,11 +1217,30 @@ static int mdss_fb_alloc_fbmem_iommu(struct msm_fb_data_type *mfd, int dom)
 		mfd->fbi->fix.smem_len = 0;
 		return 0;
 	} else {
-		of_property_read_u32(pdev->dev.of_node,
-			 "qcom,memory-alt-reservation-size", &size);
+		pr_err("No IOMMU Domain");
+		goto fb_mmap_failed;
 	}
 
-	pr_info("%s frame buffer reserve_size=0x%x\n", __func__, size);
+	mfd->fbmem_buf = ion_share_dma_buf(mfd->fb_ion_client,
+			mfd->fb_ion_handle);
+
+	vaddr  = ion_map_kernel(mfd->fb_ion_client, mfd->fb_ion_handle);
+	if (IS_ERR_OR_NULL(vaddr)) {
+		pr_err("ION memory mapping failed - %ld\n", PTR_ERR(vaddr));
+		rc = PTR_ERR(vaddr);
+		if (mfd->mdp.fb_mem_get_iommu_domain) {
+			ion_unmap_iommu(mfd->fb_ion_client, mfd->fb_ion_handle,
+					mfd->mdp.fb_mem_get_iommu_domain(), 0);
+		}
+		goto fb_mmap_failed;
+	}
+
+	pr_info("alloc 0x%xB vaddr = %p (%pa iova) for fb%d\n", fb_size, vaddr,
+			&mfd->iova, mfd->index);
+
+	mfd->fbi->screen_base = (char *) vaddr;
+	mfd->fbi->fix.smem_start = (unsigned int) mfd->iova;
+	mfd->fbi->fix.smem_len = fb_size;
 
 	if (size < PAGE_ALIGN(mfd->fbi->fix.line_length *
 			      mfd->fbi->var.yres_virtual))

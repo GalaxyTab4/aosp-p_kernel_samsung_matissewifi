@@ -115,7 +115,7 @@ struct msm_mdp_interface {
 	int (*ioctl_handler)(struct msm_fb_data_type *mfd, u32 cmd, void *arg);
 	void (*dma_fnc)(struct msm_fb_data_type *mfd);
 	int (*cursor_update)(struct msm_fb_data_type *mfd,
-				struct fb_cursor *cursor);
+				struct fb_cursor *cursor);b5bcf0976346a282fa78d65588479bd6ee4b6403
 	int (*lut_update)(struct msm_fb_data_type *mfd, struct fb_cmap *cmap);
 	int (*do_histogram)(struct msm_fb_data_type *mfd,
 				struct mdp_histogram *hist);
@@ -235,7 +235,16 @@ struct msm_fb_data_type {
 
 	u32 dcm_state;
 	struct list_head proc_list;
-	u32 wait_for_kickoff;
+	struct ion_client *fb_ion_client;
+	struct ion_handle *fb_ion_handle;
+	struct dma_buf *fbmem_buf;
+
+	int (*quickdraw_fb_cleanup)(struct msm_fb_data_type *mfd);
+	int (*quickdraw_fb_prepare)(struct msm_fb_data_type *mfd);
+	bool quickdraw_in_progress;
+	u32 quickdraw_panel_state;
+	bool quickdraw_reset_panel;
+};
 
 	int blank_mode;
 };
