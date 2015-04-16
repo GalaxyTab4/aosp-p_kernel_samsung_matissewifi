@@ -51,30 +51,10 @@ static void msm_comm_generate_sys_error(struct msm_vidc_inst *inst);
 =======
 static void handle_session_error(enum command_response cmd, void *data);
 
-static bool is_turbo_requested(struct msm_vidc_core *core,
-		enum session_type type)
+static inline bool is_turbo_session(struct msm_vidc_inst *inst)
 {
-	struct msm_vidc_inst *inst = NULL;
-	bool wants_turbo = false;
-
-	mutex_lock(&core->lock);
-	list_for_each_entry(inst, &core->instances, list) {
-
-		mutex_lock(&inst->lock);
-		if (inst->session_type == type &&
-			inst->state >= MSM_VIDC_OPEN_DONE &&
-			inst->state < MSM_VIDC_STOP_DONE) {
-			wants_turbo = inst->flags & VIDC_TURBO;
-		}
-		mutex_unlock(&inst->lock);
-
- 		if (wants_turbo)		 		if (wants_turbo)
--			return true;		+			break;
- 	}		 	}
-
--	return false;		+	mutex_unlock(&core->lock);
-+
-+	return wants_turbo;
+	return !!(inst->flags & VIDC_TURBO);
+}
 
 static bool is_thumbnail_session(struct msm_vidc_inst *inst)
 {
@@ -131,6 +111,40 @@ static int msm_comm_get_mbs_per_sec(struct msm_vidc_inst *inst)
 		return NUM_MBS_PER_SEC(height, width, fps);
 	} else
 		return NUM_MBS_PER_SEC(height, width, inst->prop.fps);
+}
+enum load_calc_quirks {
+	LOAD_CALC_NO_QUIRKS = 0,
+	LOAD_CALC_IGNORE_TURBO_LOAD = 1 << 0,
+	LOAD_CALC_IGNORE_THUMBNAIL_LOAD = 1 << 1,
+	LOAD_CALC_IGNORE_NON_REALTIME_LOAD = 1 << 2,
+};
+
+static int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
+		enum load_calc_quirks quirks)
+{
+	int load = 0;
+
+	if (!(inst->state >= MSM_VIDC_OPEN_DONE &&
+		inst->state < MSM_VIDC_STOP_DONE))
+		return 0;
+
+	load = msm_comm_get_mbs_per_sec(inst);
+
+	if (is_thumbnail_session(inst)) {
+		if (quirks & LOAD_CALC_IGNORE_THUMBNAIL_LOAD)
+			load = 0;
+	}
+
+	if (is_turbo_session(inst)) {
+		if (!(quirks & LOAD_CALC_IGNORE_TURBO_LOAD))
+			load = inst->core->resources.max_load;
+	}
+
+	if (is_non_realtime_session(inst) &&
+		(quirks & LOAD_CALC_IGNORE_NON_REALTIME_LOAD))
+		load = msm_comm_get_mbs_per_sec(inst) / inst->prop.fps;
+
+        return load;
 }
 enum load_calc_quirks {
 	LOAD_CALC_NO_QUIRKS = 0,
@@ -1823,6 +1837,9 @@ static int msm_vidc_load_resources(int flipped_state,
 	int rc = 0;
 	struct hfi_device *hdev;
 	int num_mbs_per_sec = 0;
+	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
+		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
+		LOAD_CALC_IGNORE_NON_REALTIME_LOAD;
 
 	if (!inst || !inst->core || !inst->core->device) {
 		dprintk(VIDC_ERR, "%s invalid parameters", __func__);
@@ -1835,8 +1852,9 @@ static int msm_vidc_load_resources(int flipped_state,
 		return -EINVAL;
 	}
 
-	num_mbs_per_sec = msm_comm_get_load(inst->core, MSM_VIDC_DECODER);
-	num_mbs_per_sec += msm_comm_get_load(inst->core, MSM_VIDC_ENCODER);
+	num_mbs_per_sec =
+		msm_comm_get_load(inst->core, MSM_VIDC_DECODER, quirks) +
+		msm_comm_get_load(inst->core, MSM_VIDC_ENCODER, quirks);
 
 	if (num_mbs_per_sec > inst->core->resources.max_load) {
 		dprintk(VIDC_ERR, "HW is overloaded, needed: %d max: %d\n",
@@ -3263,7 +3281,7 @@ static int msm_vidc_load_supported(struct msm_vidc_inst *inst)
 		num_mbs_per_sec = msm_comm_get_load(inst->core,
 			MSM_VIDC_DECODER, quirks);
 		num_mbs_per_sec += msm_comm_get_load(inst->core,
-			MSM_VIDC_ENCODER);
+			MSM_VIDC_ENCODER, quirks);
 		if (num_mbs_per_sec > inst->core->resources.max_load) {
 			dprintk(VIDC_ERR,
 				"H/w is overloaded. needed: %d max: %d\n",
