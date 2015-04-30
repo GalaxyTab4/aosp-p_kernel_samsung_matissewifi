@@ -111,6 +111,7 @@ static int msm_comm_get_mbs_per_sec(struct msm_vidc_inst *inst)
 		return NUM_MBS_PER_SEC(height, width, fps);
 	} else
 		return NUM_MBS_PER_SEC(height, width, inst->prop.fps);
+<<<<<<< HEAD
 }
 enum load_calc_quirks {
 	LOAD_CALC_NO_QUIRKS = 0,
@@ -145,6 +146,8 @@ static int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
 		load = msm_comm_get_mbs_per_sec(inst) / inst->prop.fps;
 
         return load;
+=======
+>>>>>>> 026a8ed... msm: vidc: add driver support to enable operating rate
 }
 enum load_calc_quirks {
 	LOAD_CALC_NO_QUIRKS = 0,
