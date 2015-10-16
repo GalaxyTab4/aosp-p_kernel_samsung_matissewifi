@@ -837,44 +837,48 @@ static void handle_session_error(enum command_response cmd, void *data)
 static void handle_sys_error(enum command_response cmd, void *data)
 {
 	struct msm_vidc_cb_cmd_done *response = data;
-	struct msm_vidc_inst *inst = NULL ;
-	struct msm_vidc_core *core = NULL;
 	struct hfi_device *hdev = NULL;
-	int rc = 0;
+	struct msm_vidc_inst *inst = NULL;
 
-	handler = container_of(work, struct sys_err_handler_data, work.work);
-	if (!handler || !handler->core || !handler->core->device) {
-		dprintk(VIDC_ERR, "%s - invalid work or core handle\n",
-				__func__);
-		goto exit;
+	if (!response) {
+		dprintk(VIDC_ERR,
+			"Failed to get valid response for session error\n");
+		return;
 	}
 
-	core = handler->core;
-	hdev = core->device;
+	inst = (struct msm_vidc_inst *)response->session_id;
 
-	mutex_lock(&core->lock);
-	/*
-	* Restart the firmware to bring out of bad state.
-	*/
-	if ((core->state == VIDC_CORE_INVALID) &&
-		hdev->resurrect_fw) {
-		rc = call_hfi_op(hdev, resurrect_fw,
-				hdev->hfi_device_data);
-		if (rc) {
-			dprintk(VIDC_ERR,
-				"Got SYS_ERR but unable to identify core");
-		}
-		core->state = VIDC_CORE_LOADED;
+	if (!inst || !inst->session || !inst->core->device) {
+		dprintk(VIDC_ERR,
+				"Session (%p) not in a stable enough state to handle session error\n",
+				inst);
+		return;
+	}
+
+	hdev = inst->core->device;
+	dprintk(VIDC_WARN, "Session error received for session %p\n", inst);
+	change_inst_state(inst, MSM_VIDC_CORE_INVALID);
+
+	if (response->status == VIDC_ERR_MAX_CLIENTS) {
+		dprintk(VIDC_WARN,
+			"send max clients reached error to client: %p\n",
+			inst);
+		msm_vidc_queue_v4l2_event(inst,
+			V4L2_EVENT_MSM_VIDC_MAX_CLIENTS);
 	} else {
 		dprintk(VIDC_ERR,
-			"Failed to get valid response for sys error\n");
+			"send session error to client: %p\n",
+			inst);
+		msm_vidc_queue_v4l2_event(inst,
+			V4L2_EVENT_MSM_VIDC_SYS_ERROR);
 	}
-	mutex_unlock(&core->lock);
-
-exit:
-	/* free sys error handler, allocated in handle_sys_err */
-	kfree(handler);
 }
+
+struct sys_err_handler_data {
+	struct msm_vidc_core *core;
+	struct delayed_work work;
+};
+
 
 static void handle_sys_watchdog_timeout(enum command_response cmd, void *data)
 {
