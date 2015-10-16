@@ -1,58 +1,10 @@
-# We can build either as part of a standalone Kernel build or part
-# of an Android build.  Determine which mechanism is being used
-ifeq ($(MODNAME),)
-	KERNEL_BUILD := 1
-else
-	KERNEL_BUILD := 0
-endif
-
-ifeq ($(KERNEL_BUILD),1)
-	# These are provided in Android-based builds
-	# Need to explicitly define for Kernel-based builds
-	MODNAME := wlan
-	WLAN_ROOT := drivers/staging/prima
-endif
-
-ifeq ($(KERNEL_BUILD), 0)
-	# These are configurable via Kconfig for kernel-based builds
-	# Need to explicitly configure for Android-based builds
-
-	#Flag to enable BlueTooth AMP feature
-	CONFIG_PRIMA_WLAN_BTAMP := n
-
-	#Flag to enable Legacy Fast Roaming(LFR)
-	CONFIG_PRIMA_WLAN_LFR := y
-
-	#JB kernel has PMKSA patches, hence enabling this flag
-	CONFIG_PRIMA_WLAN_OKC := y
-
-	# JB kernel has CPU enablement patches, so enable
-	CONFIG_PRIMA_WLAN_11AC_HIGH_TP := y
-
-	#Flag to enable TDLS feature
-	CONFIG_QCOM_TDLS := y
-
-	#Flag to enable Fast Transition (11r) feature
-	CONFIG_QCOM_VOWIFI_11R := y
-
-	#Flag to enable Protected Managment Frames (11w) feature
-	ifneq ($(CONFIG_PRONTO_WLAN),)
-	CONFIG_WLAN_FEATURE_11W := y
-	endif
-
-	#Flag to enable new Linux Regulatory implementation
-	CONFIG_ENABLE_LINUX_REG := y
-
-endif
-
-# To enable CCX upload, dependent config
-# CONFIG_QCOM_CCX must be enabled.
-CONFIG_QCOM_CCX_UPLOAD := n
+MODNAME := wlan
+WLAN_ROOT := drivers/staging/prima
 
 # Feature flags which are not (currently) configurable via Kconfig
 
 #Whether to build debug version
-BUILD_DEBUG_VERSION := 1
+BUILD_DEBUG_VERSION := 0
 
 #Enable this flag to build driver in diag version
 BUILD_DIAG_VERSION := 1
@@ -137,6 +89,7 @@ HDD_OBJS := 	$(HDD_SRC_DIR)/bap_hdd_main.o \
 		$(HDD_SRC_DIR)/wlan_hdd_scan.o \
 		$(HDD_SRC_DIR)/wlan_hdd_softap_tx_rx.o \
 		$(HDD_SRC_DIR)/wlan_hdd_tx_rx.o \
+                $(HDD_SRC_DIR)/wlan_hdd_trace.o \
 		$(HDD_SRC_DIR)/wlan_hdd_wext.o \
 		$(HDD_SRC_DIR)/wlan_hdd_wmm.o \
 		$(HDD_SRC_DIR)/wlan_hdd_wowl.o
@@ -326,9 +279,13 @@ NLINK_OBJS :=	$(NLINK_SRC_DIR)/wlan_nlink_srv.o
 PTT_SRC_DIR :=	$(SVC_SRC_DIR)/ptt
 PTT_OBJS :=	$(PTT_SRC_DIR)/wlan_ptt_sock_svc.o
 
+WLAN_LOGGING_SRC_DIR := $(SVC_SRC_DIR)/logging
+WLAN_LOGGING_OBJS := $(WLAN_LOGGING_SRC_DIR)/wlan_logging_sock_svc.o
+
 SVC_OBJS :=	$(BTC_OBJS) \
 		$(NLINK_OBJS) \
-		$(PTT_OBJS)
+		$(PTT_OBJS) \
+                $(WLAN_LOGGING_OBJS)
 
 ############ SYS ############
 SYS_DIR :=	CORE/SYS
@@ -538,7 +495,18 @@ CDEFINES :=	-DANI_BUS_TYPE_PLATFORM=1 \
 		-DWLAN_WAKEUP_EVENTS \
 	        -DWLAN_KD_READY_NOTIFIER \
 		-DFEATURE_WLAN_BATCH_SCAN \
-		-DFEATURE_WLAN_LPHB
+		-DFEATURE_WLAN_LPHB \
+		-DFEATURE_WLAN_CH144 \
+                -DWLAN_BUG_ON_SKB_ERROR \
+                -DWLAN_DXE_LOW_RESOURCE_TIMER \
+                -DWLAN_LOGGING_SOCK_SVC_ENABLE
+
+
+ifeq ($(strip $(BOARD_USES_UTAG_WIFI_MAC)),)
+CDEFINES += -DWLAN_NV_OTA_UPGRADE
+else
+CDEFINES += -DMOTO_UTAGS_MAC
+endif
 
 ifneq ($(CONFIG_PRONTO_WLAN),)
 CDEFINES += -DWCN_PRONTO
@@ -596,6 +564,9 @@ endif
 
 ifeq ($(CONFIG_PRIMA_WLAN_LFR),y)
 CDEFINES += -DFEATURE_WLAN_LFR
+#Begin fjdw67 Motorola, IKJB42MAIN-6385 - LFR roaming instrumentation
+CDEFINES += -DFEATURE_WLAN_LFR_METRICS
+#End IKJB42MAIN-6385
 endif
 
 ifeq ($(CONFIG_PRIMA_WLAN_OKC),y)
@@ -627,20 +598,16 @@ ifeq ($(RE_ENABLE_WIFI_ON_WDI_TIMEOUT),1)
 CDEFINES += -DWDI_RE_ENABLE_WIFI_ON_WDI_TIMEOUT
 endif
 
-ifeq ($(KERNEL_BUILD),1)
 CDEFINES += -DWLAN_OPEN_SOURCE
-endif
-
-ifeq ($(findstring opensource, $(WLAN_ROOT)), opensource)
-CDEFINES += -DWLAN_OPEN_SOURCE
-endif
 
 ifeq ($(CONFIG_ENABLE_LINUX_REG), y)
 CDEFINES += -DCONFIG_ENABLE_LINUX_REG
 endif
 
+CDEFINES += -DFEATURE_WLAN_CH_AVOID
+
 # Fix build for GCC 4.7
-EXTRA_CFLAGS += -Wno-maybe-uninitialized -Wno-unused-function
+EXTRA_CFLAGS += -Wno-maybe-uninitialized -Wno-unused-function -Wno-unused-variable
 
 KBUILD_CPPFLAGS += $(CDEFINES)
 

@@ -83,6 +83,7 @@ typedef enum
 #endif /* FEATURE_WLAN_CCX */
 #ifdef WLAN_FEATURE_11W
     eCSR_AUTH_TYPE_RSN_PSK_SHA256,
+    eCSR_AUTH_TYPE_RSN_8021X_SHA256,
 #endif
     eCSR_NUM_OF_SUPPORT_AUTH_TYPE,
     eCSR_AUTH_TYPE_FAILED = 0xff,
@@ -201,6 +202,16 @@ typedef enum
     eCSR_SCAN_ABORT,
    eCSR_SCAN_FOUND_PEER,
 }eCsrScanStatus;
+
+/* Reason to abort the scan
+ * The reason can used later to decide whether to update the scan results
+ * to upper layer or not
+ */
+typedef enum
+{
+    eCSR_SCAN_ABORT_DEFAULT,
+    eCSR_SCAN_ABORT_DUE_TO_BAND_CHANGE, //Scan aborted due to band change
+}eCsrAbortReason;
 
 #define CSR_SCAN_TIME_DEFAULT       0
 #define CSR_VALUE_IGNORED           0xFFFFFFFF
@@ -460,6 +471,14 @@ typedef enum
 #ifdef FEATURE_WLAN_LFR
     eCSR_ROAM_PMK_NOTIFY,
 #endif
+//Begin fjdw67 Motorola, IKJB42MAIN-6385 - LFR roaming instrumentation
+#ifdef FEATURE_WLAN_LFR_METRICS
+    eCSR_ROAM_PREAUTH_INIT_NOTIFY,
+    eCSR_ROAM_PREAUTH_STATUS_SUCCESS,
+    eCSR_ROAM_PREAUTH_STATUS_FAILURE,
+    eCSR_ROAM_HANDOVER_SUCCESS,
+#endif
+//End fjdw67 Motorola
 #ifdef FEATURE_WLAN_TDLS
     eCSR_ROAM_TDLS_STATUS_UPDATE,
     eCSR_ROAM_RESULT_MGMT_TX_COMPLETE_IND,
@@ -1125,6 +1144,7 @@ typedef struct tagCsrConfigParam
     tANI_BOOLEAN  enableOxygenNwk;
 
     tANI_U8 isAmsduSupportInAMPDU;
+    tANI_U8 nSelect5GHzMargin;
 
 }tCsrConfigParam;
 
