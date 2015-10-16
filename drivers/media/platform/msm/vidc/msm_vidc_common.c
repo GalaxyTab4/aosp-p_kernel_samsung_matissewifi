@@ -48,7 +48,6 @@
 })
 static void msm_comm_generate_session_error(struct msm_vidc_inst *inst);
 static void msm_comm_generate_sys_error(struct msm_vidc_inst *inst);
-=======
 static void handle_session_error(enum command_response cmd, void *data);
 
 static inline bool is_turbo_session(struct msm_vidc_inst *inst)
