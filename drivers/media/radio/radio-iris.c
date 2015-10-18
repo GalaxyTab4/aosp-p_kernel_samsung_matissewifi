@@ -3179,7 +3179,6 @@ static int iris_vidioc_g_ctrl(struct file *file, void *priv,
 		retval = -EINVAL;
 	}
 
-END:
 	if (retval > 0)
 		retval = -EINVAL;
 	if (ctrl != NULL && retval < 0)
