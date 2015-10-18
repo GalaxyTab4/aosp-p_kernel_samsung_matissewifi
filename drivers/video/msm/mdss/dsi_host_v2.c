@@ -491,6 +491,16 @@ void dsi_set_tx_power_mode(int mode)
 	MIPI_OUTP(ctrl_base + DSI_COMMAND_MODE_DMA_CTRL, data);
 }
 
+int dsi_get_tx_power_mode(void)
+{
+	u32 data;
+	unsigned char *ctrl_base = dsi_host_private->dsi_base;
+
+	data = MIPI_INP(ctrl_base + DSI_COMMAND_MODE_DMA_CTRL);
+
+	return !!(data & BIT(26));
+}
+
 void msm_dsi_sw_reset(void)
 {
 	u32 dsi_ctrl;
@@ -585,19 +595,6 @@ int msm_dsi_cmd_dma_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 	unsigned long size, addr;
 	unsigned char *ctrl_base = dsi_host_private->dsi_base;
 	unsigned long flag;
-
-#if defined(CONFIG_DSI_HOST_DEBUG)
-	int i = 0;
-	char *bp;
-
-	bp = tp->data;
-
-	printk("%s: ", __func__);
-	for (i = 0; i < tp->len; i++)
-		printk("%02X ", *bp++);
-
-	printk("\n");
-#endif
 
 	len = ALIGN(tp->len, 4);
 	size = ALIGN(tp->len, SZ_4K);
@@ -717,7 +714,8 @@ static int msm_dsi_cmds_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 			}
 
 			if (dchdr->wait)
-				usleep(dchdr->wait * 1000);
+				usleep_range(dchdr->wait * 1000,
+							dchdr->wait * 1000);
 
 			mdss_dsi_buf_init(tp);
 			len = 0;
@@ -810,6 +808,13 @@ static int msm_dsi_cmds_rx_1(struct mdss_dsi_ctrl_pdata *ctrl,
 	tp = &ctrl->tx_buf;
 	rp = &ctrl->rx_buf;
 	mdss_dsi_buf_init(rp);
+
+	rc = msm_dsi_set_max_packet_size(ctrl, rlen);
+	if (rc) {
+		pr_err("%s: msm_dsi_set_max_packet_size failed\n", __func__);
+		goto dsi_cmds_rx_1_error;
+	}
+
 	mdss_dsi_buf_init(tp);
 
 	rc = mdss_dsi_cmd_dma_add(tp, cmds);
@@ -920,7 +925,7 @@ int msm_dsi_cmds_rx(struct mdss_dsi_ctrl_pdata *ctrl,
 	return rc;
 }
 
-void msm_dsi_cmdlist_tx(struct mdss_dsi_ctrl_pdata *ctrl,
+int msm_dsi_cmdlist_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 				struct dcs_cmd_req *req)
 {
 	int ret;
@@ -929,6 +934,8 @@ void msm_dsi_cmdlist_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 
 	if (req->cb)
 		req->cb(ret);
+
+	return ret;
 }
 
 void msm_dsi_cmdlist_rx(struct mdss_dsi_ctrl_pdata *ctrl,
@@ -948,11 +955,13 @@ void msm_dsi_cmdlist_rx(struct mdss_dsi_ctrl_pdata *ctrl,
 	if (req->cb)
 		req->cb(len);
 }
-int msm_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
+int msm_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp,
+			struct dcs_cmd_req *cmdreq)
 {
 	struct dcs_cmd_req *req;
 	int dsi_on;
 	int ret = -EINVAL;
+	int current_tx_mode, new_tx_mode;
 
 	mutex_lock(&ctrl->mutex);
 	dsi_on = dsi_host_private->dsi_on;
@@ -963,7 +972,10 @@ int msm_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 	}
 
 	mutex_lock(&ctrl->cmd_mutex);
-	req = mdss_dsi_cmdlist_get(ctrl);
+	if (cmdreq)
+		req = cmdreq;
+	else
+		req = mdss_dsi_cmdlist_get(ctrl);
 
 	if (!req) {
 		mutex_unlock(&ctrl->cmd_mutex);
@@ -972,15 +984,34 @@ int msm_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 
 	msm_dsi_clk_ctrl(&ctrl->panel_data, 1);
 
-	if (req->flags & CMD_REQ_RX)
+	current_tx_mode = dsi_get_tx_power_mode();
+	/* (If current tx mode is LP and
+	   if requested mode is HS), Set DSI HS mode.
+	   else (If current tx mode is HS and
+	   if requested mode is LP), Set DSI LP mode.
+	*/
+	if ((current_tx_mode == DSI_MODE_BIT_LP) &&
+			(0 == (req->flags & CMD_REQ_LP_MODE)))
+		dsi_set_tx_power_mode(0);
+	else if ((current_tx_mode == DSI_MODE_BIT_HS) &&
+			(req->flags & CMD_REQ_LP_MODE))
+		dsi_set_tx_power_mode(1);
+
+	if (req->flags & CMD_REQ_RX) {
 		msm_dsi_cmdlist_rx(ctrl, req);
-	else
-		msm_dsi_cmdlist_tx(ctrl, req);
+		ret = ctrl->rx_buf.len;
+	} else
+		ret = msm_dsi_cmdlist_tx(ctrl, req);
+
+	new_tx_mode = dsi_get_tx_power_mode();
+	/* Reset to original mode */
+	if (new_tx_mode != current_tx_mode)
+		dsi_set_tx_power_mode(current_tx_mode);
 
 	msm_dsi_clk_ctrl(&ctrl->panel_data, 0);
 
 	mutex_unlock(&ctrl->cmd_mutex);
-	return 0;
+	return ret;
 }
 
 static int msm_dsi_cal_clk_rate(struct mdss_panel_data *pdata,
@@ -1220,6 +1251,15 @@ static int msm_dsi_cont_on(struct mdss_panel_data *pdata)
 		mutex_unlock(&ctrl_pdata->mutex);
 		return ret;
 	}
+	pinfo->panel_power_on = 1;
+	ret = mdss_dsi_panel_reset(pdata, 1);
+	if (ret) {
+		pr_err("%s: Panel reset failed\n", __func__);
+		mutex_unlock(&ctrl_pdata->mutex);
+		return ret;
+	}
+
+	pinfo->cont_splash_enabled = false;
 
 	msm_dsi_ahb_ctrl(1);
 	msm_dsi_prepare_clocks();
@@ -1388,8 +1428,8 @@ static struct device_node *dsi_find_panel_of_node(
 		dsi_pan_node = of_find_node_by_name(mdss_node,
 						    panel_name);
 		if (!dsi_pan_node) {
-			pr_err("%s: invalid pan node\n",
-			       __func__);
+			pr_err("%s: invalid pan node. panel_name=%s\n",
+							__func__, panel_name);
 			dsi_pan_node = dsi_pref_prim_panel(pdev);
 		}
 	}
@@ -1445,7 +1485,6 @@ void msm_dsi_ctrl_init(struct mdss_dsi_ctrl_pdata *ctrl)
 	dsi_buf_alloc(&ctrl->rx_buf, SZ_4K);
 	ctrl->cmdlist_commit = msm_dsi_cmdlist_commit;
 	ctrl->panel_mode = ctrl->panel_data.panel_info.mipi.mode;
-	ctrl->check_status = msm_dsi_bta_status_check;
 }
 
 static int __devinit msm_dsi_probe(struct platform_device *pdev)
@@ -1531,6 +1570,14 @@ static int __devinit msm_dsi_probe(struct platform_device *pdev)
 		pr_warn("%s:%d:dsi specific cfg not present\n",
 							 __func__, __LINE__);
 
+	/* Parse panel config */
+	rc = mdss_panel_parse_panel_config_dt(ctrl_pdata);
+	if (rc) {
+		pr_err("%s: failed to parse panel config dt, rc = %d\n",
+								__func__, rc);
+		goto error_pan_node;
+	}
+
 	/* find panel device node */
 	dsi_pan_node = dsi_find_panel_of_node(pdev, panel_cfg);
 	if (!dsi_pan_node) {
@@ -1541,6 +1588,8 @@ static int __devinit msm_dsi_probe(struct platform_device *pdev)
 
 	cmd_cfg_cont_splash = mdp3_panel_get_boot_cfg() ? true : false;
 
+	ctrl_pdata->pdev = pdev;
+	ctrl_pdata->get_dt_vreg_data = dsi_parse_vreg;
 	rc = mdss_dsi_panel_init(dsi_pan_node, ctrl_pdata, cmd_cfg_cont_splash);
 	if (rc) {
 		pr_err("%s: dsi panel init failed\n", __func__);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  * Copyright (C) 2007 Google Incorporated
  *
  * This software is licensed under the terms of the GNU General Public
@@ -1667,71 +1667,6 @@ u32 mdp3_fb_stride(u32 fb_index, u32 xres, int bpp)
 		return xres * bpp;
 }
 
-static int mdp3_alloc(size_t size, void **virt, unsigned long *phys)
-{
-	int ret = 0;
-
-	if (mdp3_res->ion_handle) {
-		pr_debug("memory already alloc\n");
-		*virt = mdp3_res->virt;
-		*phys = mdp3_res->phys;
-		return 0;
-	}
-
-	mdp3_res->ion_handle = ion_alloc(mdp3_res->ion_client, size,
-					SZ_1M,
-					ION_HEAP(ION_QSECOM_HEAP_ID), 0);
-
-	if (!IS_ERR_OR_NULL(mdp3_res->ion_handle)) {
-		*virt = ion_map_kernel(mdp3_res->ion_client,
-					mdp3_res->ion_handle);
-		if (IS_ERR(*virt)) {
-			pr_err("map kernel error\n");
-			goto ion_map_kernel_err;
-		}
-
-		ret = ion_phys(mdp3_res->ion_client, mdp3_res->ion_handle,
-				phys, &size);
-		if (ret) {
-			pr_err("%s ion_phys error\n", __func__);
-			goto ion_map_phys_err;
-		}
-
-		mdp3_res->virt = *virt;
-		mdp3_res->phys = *phys;
-		mdp3_res->size = size;
-	} else {
-		pr_err("%s ion alloc fail\n", __func__);
-		mdp3_res->ion_handle = NULL;
-		return -ENOMEM;
-	}
-
-	return 0;
-
-ion_map_phys_err:
-	ion_unmap_kernel(mdp3_res->ion_client, mdp3_res->ion_handle);
-ion_map_kernel_err:
-	ion_free(mdp3_res->ion_client, mdp3_res->ion_handle);
-	mdp3_res->ion_handle = NULL;
-	mdp3_res->virt = NULL;
-	mdp3_res->phys = 0;
-	mdp3_res->size = 0;
-	return -ENOMEM;
-}
-
-void mdp3_free(void)
-{
-	pr_debug("mdp3_fbmem_free\n");
-	if (mdp3_res->ion_handle) {
-		ion_unmap_kernel(mdp3_res->ion_client, mdp3_res->ion_handle);
-		ion_free(mdp3_res->ion_client, mdp3_res->ion_handle);
-		mdp3_res->ion_handle = NULL;
-		mdp3_res->virt = NULL;
-		mdp3_res->phys = 0;
-		mdp3_res->size = 0;
-	}
-}
-
 int mdp3_parse_dt_splash(struct msm_fb_data_type *mfd)
 {
 	struct platform_device *pdev = mfd->pdev;
@@ -1752,13 +1687,13 @@ int mdp3_parse_dt_splash(struct msm_fb_data_type *mfd)
 	mdp3_res->splash_mem_addr = offsets[0];
 	mdp3_res->splash_mem_size = offsets[1];
 
-	pr_debug("memaddr=%x size=%x\n", mdp3_res->splash_mem_addr,
+	pr_debug("memaddr=%lx size=%x\n", mdp3_res->splash_mem_addr,
 		mdp3_res->splash_mem_size);
 
 	return rc;
 }
 
-void mdp3_release_splash_memory(void)
+void mdp3_release_splash_memory(struct msm_fb_data_type *mfd)
 {
 	/* Give back the reserved memory to the system */
 	if (mdp3_res->splash_mem_addr) {
@@ -1811,44 +1746,6 @@ int mdp3_get_cont_spash_en(void)
 	return mdp3_res->cont_splash_en;
 }
 
-int mdp3_continuous_splash_copy(struct mdss_panel_data *pdata)
-{
-	unsigned long splash_phys, phys;
-	void *splash_virt, *virt;
-	u32 height, width, rgb_size, stride;
-	size_t size;
-	int rc;
-
-	if (pdata->panel_info.type != MIPI_VIDEO_PANEL) {
-		pr_debug("cmd mode panel, no need to copy splash image\n");
-		return 0;
-	}
-
-	rgb_size = MDP3_REG_READ(MDP3_REG_DMA_P_SIZE);
-	stride = MDP3_REG_READ(MDP3_REG_DMA_P_IBUF_Y_STRIDE);
-	stride = stride & 0x3FFF;
-	splash_phys = MDP3_REG_READ(MDP3_REG_DMA_P_IBUF_ADDR);
-
-	height = (rgb_size >> 16) & 0xffff;
-	width  = rgb_size & 0xffff;
-	size = PAGE_ALIGN(height * stride);
-	pr_debug("splash_height=%d splash_width=%d Buffer size=%d\n",
-		height, width, size);
-
-	rc = mdp3_alloc(size, &virt, &phys);
-	if (rc) {
-		pr_err("fail to allocate memory for continuous splash image\n");
-		return rc;
-	}
-
-	splash_virt = ioremap(splash_phys, stride * height);
-	memcpy(virt, splash_virt, stride * height);
-	iounmap(splash_virt);
-	MDP3_REG_WRITE(MDP3_REG_DMA_P_IBUF_ADDR, phys);
-
-	return 0;
-}
-
 static int mdp3_is_display_on(struct mdss_panel_data *pdata)
 {
 	int rc = 0;
@@ -1881,6 +1778,9 @@ static int mdp3_continuous_splash_on(struct mdss_panel_data *pdata)
 	pr_debug("mdp3__continuous_splash_on\n");
 
 	mdp3_clk_set_rate(MDP3_CLK_VSYNC, MDP_VSYNC_CLK_RATE,
+			MDP3_CLIENT_DMA_P);
+
+	mdp3_clk_set_rate(MDP3_CLK_CORE, MDP_CORE_CLK_RATE,
 			MDP3_CLIENT_DMA_P);
 
 	rc = mdp3_clk_prepare();

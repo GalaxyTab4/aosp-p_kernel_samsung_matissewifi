@@ -81,6 +81,9 @@
 #define MSMFB_ASYNC_BLIT              _IOW(MSMFB_IOCTL_MAGIC, 168, unsigned int)
 #define MSMFB_OVERLAY_PREPARE		_IOWR(MSMFB_IOCTL_MAGIC, 169, \
 						struct mdp_overlay_list)
+#define MSMFB_REG_READ   _IOWR(MSMFB_IOCTL_MAGIC, 64, struct msmfb_reg_access)
+#define MSMFB_REG_WRITE  _IOW(MSMFB_IOCTL_MAGIC, 65, struct msmfb_reg_access)
+
 #define FB_TYPE_3D_PANEL 0x10101010
 #define MDP_IMGTYPE2_START 0x10000
 #define MSMFB_DRIVER_VERSION	0xF9E8D701
@@ -436,13 +439,13 @@ struct mdp_pa_v2_data {
 	uint32_t global_sat_adj;
 	uint32_t global_val_adj;
 	uint32_t global_cont_adj;
-	uint32_t six_zone_len;
-	uint32_t *six_zone_curve_p0;
-	uint32_t *six_zone_curve_p1;
-	uint32_t six_zone_thresh;
 	struct mdp_pa_mem_col_cfg skin_cfg;
 	struct mdp_pa_mem_col_cfg sky_cfg;
 	struct mdp_pa_mem_col_cfg fol_cfg;
+	uint32_t six_zone_len;
+	uint32_t six_zone_thresh;
+	uint32_t *six_zone_curve_p0;
+	uint32_t *six_zone_curve_p1;
 };
 
 struct mdp_igc_lut_data {
@@ -836,7 +839,6 @@ enum {
 
 #define MDSS_MAX_BL_BRIGHTNESS 255
 #define AD_BL_LIN_LEN 256
-#define AD_BL_ATT_LUT_LEN 33
 
 #define MDSS_AD_MODE_AUTO_BL	0x0
 #define MDSS_AD_MODE_AUTO_STR	0x1
@@ -865,13 +867,9 @@ struct mdss_ad_init {
 	uint16_t frame_h;
 	uint8_t logo_v;
 	uint8_t logo_h;
-	uint32_t alpha;
-	uint32_t alpha_base;
 	uint32_t bl_lin_len;
-	uint32_t bl_att_len;
 	uint32_t *bl_lin;
 	uint32_t *bl_lin_inv;
-	uint32_t *bl_att_lut;
 };
 
 #define MDSS_AD_BL_CTRL_MODE_EN 1
@@ -1083,6 +1081,13 @@ struct msmfb_mixer_info_req {
 	struct mdp_mixer_info info[MAX_PIPE_PER_MIXER];
 };
 
+struct msmfb_reg_access {
+	uint8_t address;
+	uint8_t use_hs_mode;
+	size_t buffer_size;
+	void __user *buffer;
+};
+
 enum {
 	DISPLAY_SUBSYSTEM_ID,
 	ROTATOR_SUBSYSTEM_ID,
@@ -1121,6 +1126,7 @@ int msm_fb_writeback_dequeue_buffer(struct fb_info *info,
 int msm_fb_writeback_stop(struct fb_info *info);
 int msm_fb_writeback_terminate(struct fb_info *info);
 int msm_fb_writeback_set_secure(struct fb_info *info, int enable);
+int msm_fb_writeback_iommu_ref(struct fb_info *info, int enable);
 #endif
 
 #endif /*_MSM_MDP_H_*/

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,6 +17,7 @@
 #include <linux/iopoll.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
+#include <linux/uaccess.h>
 
 #include "dsi_v2.h"
 
@@ -57,8 +58,6 @@ static int dsi_panel_handler(struct mdss_panel_data *pdata, int enable)
 	int rc = 0;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 
-	pr_info("%s+: enable=%d\n", __func__, enable);
-
 	pr_debug("dsi_panel_handler enable=%d\n", enable);
 	if (!pdata)
 		return -ENODEV;
@@ -66,23 +65,38 @@ static int dsi_panel_handler(struct mdss_panel_data *pdata, int enable)
 				panel_data);
 
 	if (enable) {
-		dsi_ctrl_gpio_request(ctrl_pdata);
-		mdss_dsi_panel_reset(pdata, 1);
-		rc = ctrl_pdata->on(pdata);
-		if (rc)
-			pr_err("dsi_panel_handler panel on failed %d\n", rc);
+		pdata->panel_info.panel_power_on = 1;
+		if (ctrl_pdata->on)
+			ctrl_pdata->on(pdata);
+		else {
+			pr_err("%s: ctrl_pdata->on() is not defined\n",
+								__func__);
+			rc = -EINVAL;
+		}
 	} else {
 		if (dsi_intf.op_mode_config)
 			dsi_intf.op_mode_config(DSI_CMD_MODE, pdata);
-		rc = ctrl_pdata->off(pdata);
-		mdss_dsi_panel_reset(pdata, 0);
-		dsi_ctrl_gpio_free(ctrl_pdata);
-	}
 
-	pr_info("%s-:\n", __func__);
+		if (ctrl_pdata->off)
+			ctrl_pdata->off(pdata);
+		else {
+			pr_err("%s: ctrl_pdata->off() is not defined\n",
+								__func__);
+			rc = -EINVAL;
+		}
+		pdata->panel_info.panel_power_on = 0;
+	}
+	return rc;
+}
+
+int dsi_panel_ioctl_handler(struct mdss_panel_data *pdata, u32 cmd, void *arg)
+{
+	int rc = -EINVAL;
+	rc = mdss_dsi_panel_ioctl_handler(pdata, cmd, arg);
 
 	return rc;
 }
+
 
 static int dsi_splash_on(struct mdss_panel_data *pdata)
 {
@@ -112,38 +126,20 @@ static int dsi_clk_ctrl(struct mdss_panel_data *pdata, int enable)
 	return rc;
 }
 
-#if defined(CONFIG_GET_LCD_ATTACHED)
-extern int get_lcd_attached(void);
-#endif
-
 static int dsi_event_handler(struct mdss_panel_data *pdata,
 				int event, void *arg)
 {
 	int rc = 0;
-
-#if defined(CONFIG_MDSS_DSI_EVENT_HANDLER_PANEL)
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
-#endif
+
 
 	if (!pdata) {
 		pr_err("%s: Invalid input data\n", __func__);
 		return -ENODEV;
 	}
 
-#if defined(CONFIG_MDSS_DSI_EVENT_HANDLER_PANEL)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
-#endif
-
-#if defined(CONFIG_GET_LCD_ATTACHED)
-	if (get_lcd_attached() == 0)
-	{
-		pr_err("%s: get_lcd_attached(0)!\n",__func__);
-		return 0;
-	}
-#endif
-
-	pr_info("%s : event = %d\n", __func__, event);
 
 	switch (event) {
 	case MDSS_EVENT_UNBLANK:
@@ -153,6 +149,8 @@ static int dsi_event_handler(struct mdss_panel_data *pdata,
 		rc = dsi_off(pdata);
 		break;
 	case MDSS_EVENT_PANEL_ON:
+		if (ctrl_pdata->bl_on_defer)
+			ctrl_pdata->bl_on_defer(ctrl_pdata);
 		rc = dsi_panel_handler(pdata, 1);
 		break;
 	case MDSS_EVENT_PANEL_OFF:
@@ -164,30 +162,9 @@ static int dsi_event_handler(struct mdss_panel_data *pdata,
 	case MDSS_EVENT_PANEL_CLK_CTRL:
 		rc = dsi_clk_ctrl(pdata, (int)arg);
 		break;
-#if defined(CONFIG_MDSS_DSI_EVENT_HANDLER_PANEL)
-	case MDSS_EVENT_FB_REGISTERED:
-		if (ctrl_pdata->registered) {
-			pr_debug("%s:event=%d, calling panel registered callback \n",
-				 __func__, event);
-			rc = ctrl_pdata->registered(pdata);
-
-			/*
-			 *	Okay, since framebuffer is registered, display the kernel logo if needed
-			*/
-		}
-		break;
-	default:
-		if(ctrl_pdata->event_handler) {
-			rc = ctrl_pdata->event_handler(event);
-		} else {
-			pr_err("%s: unhandled event=%d\n", __func__, event);
-		}
-		break;
-#else
 	default:
 		pr_debug("%s: unhandled event=%d\n", __func__, event);
 		break;
-#endif
 	}
 	return rc;
 }
@@ -251,78 +228,27 @@ int dsi_ctrl_gpio_request(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	int rc = 0;
 
-	if (gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
-		rc = gpio_request(ctrl_pdata->disp_en_gpio, "disp_enable");
-		if (rc)
-			goto gpio_request_err4;
-
-		ctrl_pdata->disp_en_gpio_requested = 1;
-	}
-
-	if (gpio_is_valid(ctrl_pdata->rst_gpio)) {
-		rc = gpio_request(ctrl_pdata->rst_gpio, "disp_rst_n");
-		if (rc)
-			goto gpio_request_err3;
-
-		ctrl_pdata->rst_gpio_requested = 1;
-	}
-
 	if (gpio_is_valid(ctrl_pdata->disp_te_gpio)) {
 		rc = gpio_request(ctrl_pdata->disp_te_gpio, "disp_te");
 		if (rc)
-			goto gpio_request_err2;
-
-		ctrl_pdata->disp_te_gpio_requested = 1;
+			ctrl_pdata->disp_te_gpio_requested = 0;
+		else
+			ctrl_pdata->disp_te_gpio_requested = 1;
 	}
 
-	if (gpio_is_valid(ctrl_pdata->mode_gpio)) {
-		rc = gpio_request(ctrl_pdata->mode_gpio, "panel_mode");
-		if (rc)
-			goto gpio_request_err1;
-
-		ctrl_pdata->mode_gpio_requested = 1;
-	}
-
-	return rc;
-
-gpio_request_err1:
-	if (gpio_is_valid(ctrl_pdata->disp_te_gpio))
-		gpio_free(ctrl_pdata->disp_te_gpio);
-gpio_request_err2:
-	if (gpio_is_valid(ctrl_pdata->rst_gpio))
-		gpio_free(ctrl_pdata->rst_gpio);
-gpio_request_err3:
-	if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
-		gpio_free(ctrl_pdata->disp_en_gpio);
-gpio_request_err4:
-	ctrl_pdata->disp_en_gpio_requested = 0;
-	ctrl_pdata->rst_gpio_requested = 0;
-	ctrl_pdata->disp_te_gpio_requested = 0;
-	ctrl_pdata->mode_gpio_requested = 0;
 	return rc;
 }
 
 void dsi_ctrl_gpio_free(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
-	if (ctrl_pdata->disp_en_gpio_requested) {
-		gpio_free(ctrl_pdata->disp_en_gpio);
-		ctrl_pdata->disp_en_gpio_requested = 0;
-	}
-	if (ctrl_pdata->rst_gpio_requested) {
-		gpio_free(ctrl_pdata->rst_gpio);
-		ctrl_pdata->rst_gpio_requested = 0;
-	}
 	if (ctrl_pdata->disp_te_gpio_requested) {
 		gpio_free(ctrl_pdata->disp_te_gpio);
 		ctrl_pdata->disp_te_gpio_requested = 0;
 	}
-	if (ctrl_pdata->mode_gpio_requested) {
-		gpio_free(ctrl_pdata->mode_gpio);
-		ctrl_pdata->mode_gpio_requested = 0;
-	}
 }
 
-static int dsi_parse_vreg(struct device *dev, struct dss_module_power *mp)
+int dsi_parse_vreg(struct device *dev, struct dss_module_power *mp,
+						struct device_node *node)
 {
 	int i = 0, rc = 0;
 	u32 tmp = 0;
@@ -335,7 +261,10 @@ static int dsi_parse_vreg(struct device *dev, struct dss_module_power *mp)
 		goto error;
 	}
 
-	np = dev->of_node;
+	if (node)
+		np = node;
+	else
+		np = dev->of_node;
 
 	mp->num_vreg = 0;
 	for_each_child_of_node(np, supply_node) {
@@ -528,7 +457,7 @@ int dsi_ctrl_config_init(struct platform_device *pdev,
 {
 	int rc;
 
-	rc = dsi_parse_vreg(&pdev->dev, &ctrl_pdata->power_data);
+	rc = dsi_parse_vreg(&pdev->dev, &ctrl_pdata->power_data, NULL);
 	if (rc) {
 		pr_err("%s:%d unable to get the regulator resources",
 			__func__, __LINE__);
