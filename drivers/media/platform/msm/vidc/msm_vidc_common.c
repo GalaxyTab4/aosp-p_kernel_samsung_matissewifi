@@ -1817,10 +1817,11 @@ static int msm_vidc_load_resources(int flipped_state,
 	struct msm_vidc_inst *inst)
 {
 	int rc = 0;
-	u32 ocmem_sz = 0;
 	struct hfi_device *hdev;
 	int num_mbs_per_sec = 0;
-	int height, width;
+	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
+		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
+		LOAD_CALC_IGNORE_NON_REALTIME_LOAD;
 
 	if (!inst || !inst->core || !inst->core->device) {
 		dprintk(VIDC_ERR, "%s invalid parameters", __func__);
@@ -1837,17 +1838,14 @@ static int msm_vidc_load_resources(int flipped_state,
 	num_mbs_per_sec =
 		msm_comm_get_load(inst->core, MSM_VIDC_DECODER, quirks) +
 		msm_comm_get_load(inst->core, MSM_VIDC_ENCODER, quirks);
-	mutex_unlock(&inst->core->sync_lock);
 
 	if (num_mbs_per_sec > inst->core->resources.max_load) {
 		dprintk(VIDC_ERR, "HW is overloaded, needed: %d max: %d\n",
 			num_mbs_per_sec, inst->core->resources.max_load);
 		msm_vidc_print_running_insts(inst->core);
-#if 0 /* Samsung skips the overloaded error return  */		
-		inst->state = MSM_VIDC_CORE_INVALID;
-		msm_comm_recover_from_session_error(inst);
-		return -ENOMEM;
-#endif		
+	 /* Samsung skips the overloaded error return  */		
+	
+	
 	}
 
 	hdev = inst->core->device;
@@ -1856,33 +1854,7 @@ static int msm_vidc_load_resources(int flipped_state,
 						inst, inst->state);
 		goto exit;
 	}
-	if (inst->core->resources.has_ocmem) {
-		height = max(inst->prop.height[CAPTURE_PORT],
-			inst->prop.height[OUTPUT_PORT]);
-		width = max(inst->prop.width[CAPTURE_PORT],
-			inst->prop.width[OUTPUT_PORT]);
-		ocmem_sz = get_ocmem_requirement(
-			height, width);
-		mutex_lock(&inst->core->sync_lock);
-		rc = msm_comm_scale_bus(inst->core, inst->session_type,
-					OCMEM_MEM);
-		mutex_unlock(&inst->core->sync_lock);
-		if (!rc) {
-			mutex_lock(&inst->core->sync_lock);
-			rc = call_hfi_op(hdev, alloc_ocmem,
-					hdev->hfi_device_data,
-					ocmem_sz);
-			mutex_unlock(&inst->core->sync_lock);
-			if (rc) {
-				dprintk(VIDC_WARN,
-				"Failed to allocate OCMEM. Performance will be impacted\n");
-				msm_comm_unvote_buses(inst->core, OCMEM_MEM);
-			}
-		} else {
-			dprintk(VIDC_WARN,
-			"Failed to vote for OCMEM BW. Performance will be impacted\n");
-		}
-	}
+
 	rc = call_hfi_op(hdev, session_load_res, (void *) inst->session);
 	if (rc) {
 		dprintk(VIDC_ERR,
@@ -1893,7 +1865,6 @@ static int msm_vidc_load_resources(int flipped_state,
 exit:
 	return rc;
 }
-
 static int msm_vidc_start(int flipped_state, struct msm_vidc_inst *inst)
 {
 	int rc = 0;
