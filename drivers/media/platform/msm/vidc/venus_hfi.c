@@ -86,7 +86,7 @@ struct tzbsp_video_set_state_req {
 #define IS_VENUS_IN_VALID_STATE(__device) (\
 		(__device)->state != VENUS_STATE_DEINIT)
 
-static int venus_hfi_power_enable(void *dev);
++static int venus_hfi_power_enable(void *dev);
 
 static inline int venus_hfi_clk_gating_off(struct venus_hfi_device *device);
 
@@ -1691,20 +1691,20 @@ static void venus_hfi_interface_queues_release(struct venus_hfi_device *device)
 		device->iface_queues[i].q_array.align_device_addr = NULL;
 	}
 	device->iface_q_table.mem_data = NULL;
-	device->iface_q_table.align_virtual_addr = NULL;
-	device->iface_q_table.align_device_addr = NULL;
-
+ 	device->iface_q_table.align_virtual_addr = NULL;
+ 	device->iface_q_table.align_device_addr = NULL;
+ 
 	device->qdss.mem_data = NULL;
-	device->qdss.align_virtual_addr = NULL;
-	device->qdss.align_device_addr = NULL;
-
+ 	device->qdss.align_virtual_addr = NULL;
+ 	device->qdss.align_device_addr = NULL;
+ 
 	device->sfr.mem_data = NULL;
-	device->sfr.align_virtual_addr = NULL;
-	device->sfr.align_device_addr = NULL;
-
+ 	device->sfr.align_virtual_addr = NULL;
+ 	device->sfr.align_device_addr = NULL;
+ 
 	device->mem_addr.mem_data = NULL;
-	device->mem_addr.align_virtual_addr = NULL;
-	device->mem_addr.align_device_addr = NULL;
+ 	device->mem_addr.align_virtual_addr = NULL;
+ 	device->mem_addr.align_device_addr = NULL;
 
 	msm_smem_delete_client(device->hal_client);
 	device->hal_client = NULL;
@@ -1928,7 +1928,6 @@ static int venus_hfi_core_init(void *device)
 		dprintk(VIDC_ERR, "Invalid device");
 		return -ENODEV;
 	}
-
 	VENUS_SET_STATE(dev, VENUS_STATE_INIT);
 
 	dev->intr_status = 0;
@@ -2006,6 +2005,7 @@ static int venus_hfi_core_release(void *device)
 			dprintk(VIDC_ERR,
 					"%s : Clock enable failed\n", __func__);
 			mutex_unlock(&dev->clk_pwr_lock);
+
 			return -EIO;
 		}
 		mutex_unlock(&dev->clk_pwr_lock);
