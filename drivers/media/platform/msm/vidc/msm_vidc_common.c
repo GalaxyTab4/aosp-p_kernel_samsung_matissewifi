@@ -1859,6 +1859,7 @@ static int msm_vidc_load_resources(int flipped_state,
 		goto exit;
 	}
 	if (inst->core->resources.has_ocmem) {
+		int height, width;
 		height = max(inst->prop.height[CAPTURE_PORT],
 			inst->prop.height[OUTPUT_PORT]);
 		width = max(inst->prop.width[CAPTURE_PORT],
@@ -3293,7 +3294,7 @@ static int msm_vidc_load_supported(struct msm_vidc_inst *inst)
 		num_mbs_per_sec = msm_comm_get_load(inst->core,
 			MSM_VIDC_DECODER, quirks);
 		num_mbs_per_sec += msm_comm_get_load(inst->core,
-			MSM_VIDC_ENCODER);
+			MSM_VIDC_ENCODER, quirks);
 		if (num_mbs_per_sec > inst->core->resources.max_load) {
 			dprintk(VIDC_ERR,
 				"H/w is overloaded. needed: %d max: %d\n",
